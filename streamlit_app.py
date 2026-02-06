@@ -37,6 +37,9 @@ window_size = 30
 prediction = "None Detected"
 history = deque(maxlen=5)
 
+font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+
+
 if uploaded_file:
     st.write("Processing video...")
 
@@ -50,12 +53,21 @@ if uploaded_file:
 
     # Read video with imageio
     reader = imageio.get_reader(input_tfile.name, 'ffmpeg')
-    fps = reader.get_meta_data()['fps']
+    meta = reader.get_meta_data()
+    fps = meta['fps']
+    frame_w = meta['size'][0]
+    frame_h = meta['size'][1]
+    base_dim = min(frame_w, frame_h)
+
+    font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+    label_font_size = max(20, base_dim // 20)
+    reps_font_size = max(15, base_dim // 20)
+    font_label = ImageFont.truetype(font_path, label_font_size)
+    font_reps = ImageFont.truetype(font_path, reps_font_size)
 
     writer = imageio.get_writer(output_path, fps=fps)
 
     frame_idx = 0
-    meta = reader.get_meta_data()
     total_frames = meta.get("nframes", 300)
     progress = st.progress(0)
 
@@ -103,14 +115,13 @@ if uploaded_file:
         # Annotate frame using PIL (no libGL needed)
         pil_frame = Image.fromarray(frame)
         draw = ImageDraw.Draw(pil_frame)
-        font = ImageFont.load_default()
 
         label_map = {0: "Pull Up", 1: "Push Up", 2: "Sit Up"}
         label = label_map.get(prediction, "Detecting...")
         reps = counters.get(label.lower().replace(" ", "_"), 0)
 
-        draw.text((20, 20), f"{label}", font=font, fill=(255, 255, 255))
-        draw.text((20, 50), f"Reps: {reps}", font=font, fill=(0, 255, 0))
+        draw.text((20, 20), f"{label}", font=font_label, fill=(255, 255, 255))
+        draw.text((20, 80), f"Reps: {reps}", font=font_reps, fill=(0, 255, 0))
 
         # Convert back to numpy array for writing
         writer.append_data(np.array(pil_frame))
