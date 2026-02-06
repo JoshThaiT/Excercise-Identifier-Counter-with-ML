@@ -160,4 +160,8 @@ def count_situp(hip_angle, state, counter):
         counter += 1
     
     return state, counter
+
+def smooth_prediction(new_pred, history):
+    history.append(new_pred)
+    return Counter(history).most_common(1)[0][0]
     

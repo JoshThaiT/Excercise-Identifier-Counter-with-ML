@@ -7,3 +7,5 @@ torch==2.3.0
 torchvision==0.18.0
 matplotlib==3.7.2
 scikit-learn==1.6.1
+imageio[ffmpeg]
+collections

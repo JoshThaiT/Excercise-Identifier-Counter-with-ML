@@ -1,21 +1,20 @@
 import streamlit as st
-import cv2
 import tempfile
-from utils import features_to_extract, count_pullup,count_pushup,count_situp, rescale_frame
+from utils import features_to_extract, count_pullup, count_pushup, count_situp, rescale_frame,smooth_prediction
 from ultralytics import YOLO
 import numpy as np
 from xgboost import XGBClassifier
 import pickle
 import os
+import imageio
+from PIL import Image, ImageDraw, ImageFont
+from collections import deque, Counter
 
 st.title("Exercise Tracker")
-st.write(
-    "Upload either pull up, push up and sit up and this will identify it."
-)
-uploaded_file = st.file_uploader(
-    "Upload video please",
-    type = ["mp4"]
-)
+st.write("Upload either pull up, push up, or sit up and this will identify it.")
+
+uploaded_file = st.file_uploader("Upload video please", type=["mp4"])
+
 @st.cache_resource
 def load_models():
     # Load XGB model
@@ -33,57 +32,43 @@ loaded_xgb, model = load_models()
 states = {"push_up": "UP", "pull_up": "UP", "sit_up": "UP"}
 counters = {"push_up": 0, "pull_up": 0, "sit_up": 0}
 
-buffer = [] #require to collect features for a window
+buffer = []
 window_size = 30
-prediction = 'None Detected'
+prediction = "None Detected"
+history = deque(maxlen=5)
 
 if uploaded_file:
-
     st.write("Processing video...")
 
-    # Save input video
-    input_tfile = tempfile.NamedTemporaryFile(delete=False)
+    # Save uploaded video
+    input_tfile = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
     input_tfile.write(uploaded_file.read())
-
-    cap = cv2.VideoCapture(input_tfile.name)
+    input_tfile.close()
 
     # Output temp file
     output_path = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
 
-    # Video writer setup
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    # Read video with imageio
+    reader = imageio.get_reader(input_tfile.name, 'ffmpeg')
+    fps = reader.get_meta_data()['fps']
 
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    out = cv2.VideoWriter(output_path, fourcc, fps, (w, h))
+    writer = imageio.get_writer(output_path, fps=fps)
 
-    # State vars
-    states = {"push_up": "UP", "pull_up": "UP", "sit_up": "UP"}
-    counters = {"push_up": 0, "pull_up": 0, "sit_up": 0}
-
-    buffer = []
-    window_size = 30
-    prediction = "Detecting..."
-
-    progress = st.progress(0)
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     frame_idx = 0
+    meta = reader.get_meta_data()
+    total_frames = meta.get("nframes", 300)
+    progress = st.progress(0)
 
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-
+    for frame in reader:
         frame_idx += 1
+        frame_np = np.array(frame)
 
-        # YOLO
-        results = model(frame, conf=0.2)
+        # YOLO inference
+        results = model(frame_np, conf=0.2)
         r = results[0]
 
         if r.keypoints is not None and len(r.keypoints.xy) > 0:
             kpts = r.keypoints.xy[0].cpu().numpy()
-
             h_, w_ = frame.shape[:2]
             kpts[:, 0] /= w_
             kpts[:, 1] /= h_
@@ -96,52 +81,48 @@ if uploaded_file:
 
             if len(buffer) == window_size:
                 X_input = np.array(buffer).reshape(1, -1)
-                prediction = loaded_xgb.predict(X_input)[0]
+                raw_pred = loaded_xgb.predict(X_input)[0]
+                prediction = smooth_prediction(raw_pred, history)
 
                 if prediction == 1:
                     angle = buffer[-1][1]
                     states["push_up"], counters["push_up"] = count_pushup(
                         angle, states["push_up"], counters["push_up"]
                     )
-
                 elif prediction == 0:
                     angle = buffer[-1][1]
                     states["pull_up"], counters["pull_up"] = count_pullup(
                         angle, states["pull_up"], counters["pull_up"]
                     )
-
                 elif prediction == 2:
                     angle = buffer[-1][5]
                     states["sit_up"], counters["sit_up"] = count_situp(
                         angle, states["sit_up"], counters["sit_up"]
                     )
 
-        # Draw
-        annotated = r.plot()
+        # Annotate frame using PIL (no libGL needed)
+        pil_frame = Image.fromarray(frame)
+        draw = ImageDraw.Draw(pil_frame)
+        font = ImageFont.load_default()
 
         label_map = {0: "Pull Up", 1: "Push Up", 2: "Sit Up"}
         label = label_map.get(prediction, "Detecting...")
+        reps = counters.get(label.lower().replace(" ", "_"), 0)
 
-        reps = (
-            counters["push_up"] if prediction == 1
-            else counters["pull_up"] if prediction == 0
-            else counters["sit_up"] if prediction == 2
-            else 0
-        )
+        draw.text((20, 20), f"{label}", font=font, fill=(255, 255, 255))
+        draw.text((20, 50), f"Reps: {reps}", font=font, fill=(0, 255, 0))
 
-        cv2.putText(annotated, f"{label}", (20,40),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (255,255,255), 2)
+        # Convert back to numpy array for writing
+        writer.append_data(np.array(pil_frame))
 
-        cv2.putText(annotated, f"Reps: {reps}", (20,80),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
+        progress.progress(min(frame_idx / max(total_frames, 1), 1.0))
 
-        out.write(annotated)
-
-        progress.progress(frame_idx / total_frames)
-
-    cap.release()
-    out.release()
+    reader.close()
+    writer.close()
 
     st.success("Done!")
 
-    st.video(output_path)
+    with open(output_path, "rb") as f:
+        video_bytes = f.read()
+
+    st.video(video_bytes)
