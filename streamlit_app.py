@@ -12,6 +12,8 @@ from collections import deque, Counter
 
 st.title("Exercise Tracker")
 st.write("Upload either pull up, push up, or sit up and this will identify it.")
+st.image("https://github.com/JoshThaiT/Excercise-Identifier-Counter-with-ML/blob/main/Picture1.gif")
+
 
 uploaded_file = st.file_uploader("Upload video please", type=["mp4"])
 
@@ -137,3 +139,4 @@ if uploaded_file:
         video_bytes = f.read()
 
     st.video(video_bytes)
+
