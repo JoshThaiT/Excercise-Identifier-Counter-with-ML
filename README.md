@@ -11,8 +11,8 @@ The repition of each exercise will be counted using a state machine based of exe
 
 This project was built to explore real-time ML inference and exercise tracking.
 
-## Overview
-![App Demo] 
+## Demo
+([App Demo](https://github.com/JoshThaiT/Excercise-Identifier-Counter-with-ML/blob/main/Picture1.gif))
 
 ## Features
 - Real time pose detection
